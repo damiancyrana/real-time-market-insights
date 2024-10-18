@@ -3,17 +3,24 @@ import logging
 import datetime
 import asyncio
 import traceback
+import orjson
 import pandas as pd
 import threading
 from collections import deque
 from websocket_commands import *
 from config import *
 
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from contextlib import asynccontextmanager
+import uvicorn
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Lista symboli do pobrania
-SYMBOLS = ["US100", "DE40", "EURUSD", "USDJPY", "GOLD"]
-
+SYMBOLS = ["US100"]
 
 class getTickData:
     def __init__(self, client, symbols):
@@ -26,6 +33,10 @@ class getTickData:
         self.async_data_lock = asyncio.Lock()
         # Blokada wątku dla kodu synchronicznego
         self.thread_data_lock = threading.Lock()
+        # Inicjalizacja order book dla każdego symbolu
+        self.order_books = {symbol: {} for symbol in symbols}
+        self.websockets = set()
+        self.ws_lock = asyncio.Lock()
 
     async def subscribe_ticks(self):
         tasks = [self._subscribe_tick(symbol) for symbol in self.symbols]
@@ -36,7 +47,8 @@ class getTickData:
             "command": "getTickPrices",
             "streamSessionId": self.client.stream_session_id,
             "symbol": symbol,
-            "minArrivalTime": 1
+            "minArrivalTime": 1,  # Otrzymywanie danych z maksymalną częstotliwością
+            "maxLevel": 5  # Otrzymywanie danych głębokości rynku do 5 poziomów
         }
         await self.client.send_command(subscribe_command)
 
@@ -49,9 +61,14 @@ class getTickData:
     async def receive_ticks(self):
         try:
             while self.is_running:
-                message = await self.client.receive()
-                if message:
-                    await self.process_message(message)
+                try:
+                    message = await self.client.receive()
+                    if message:
+                        await self.process_message(message)
+                except websockets.exceptions.ConnectionClosed as e:
+                    logging.error(f"Connection closed in receive_ticks: {e}")
+                    self.is_running = False
+                    break
         except Exception as e:
             logging.error(f"Error in receive_ticks: {e}")
             self.is_running = False
@@ -63,7 +80,19 @@ class getTickData:
 
     async def process_tick(self, data):
         symbol = data['symbol']
+        level = data['level']
         if symbol in self.symbols:
+            order_book = self.order_books[symbol]
+            order_book[level] = {
+                'ask': data['ask'],
+                'askVolume': data.get('askVolume'),
+                'bid': data['bid'],
+                'bidVolume': data.get('bidVolume'),
+                'timestamp': data['timestamp'],
+            }
+            await self.broadcast_order_book(symbol)
+
+            # zapisz tick do pliku
             tick_data = {
                 'timestamp': data['timestamp'],
                 'ask': data['ask'],
@@ -77,7 +106,32 @@ class getTickData:
             }
             async with self.async_data_lock:
                 self.dataframes[symbol].append(tick_data)
-            print(f"Tick data for {symbol}: {data}")
+            print(f"Tick for {symbol}: {tick_data}")
+
+    async def broadcast_order_book(self, symbol):
+        order_book = self.order_books[symbol]
+        message = {
+            'symbol': symbol,
+            'order_book': order_book,
+        }
+        websockets_to_remove = set()
+        async with self.ws_lock:
+            for ws in self.websockets:
+                try:
+                    await ws.send_json(message)
+                except Exception as e:
+                    logging.error(f"Error sending to websocket: {e}")
+                    websockets_to_remove.add(ws)
+            for ws in websockets_to_remove:
+                await self.unregister(ws)
+
+    async def register(self, websocket):
+        async with self.ws_lock:
+            self.websockets.add(websocket)
+
+    async def unregister(self, websocket):
+        async with self.ws_lock:
+            self.websockets.discard(websocket)
 
     async def save_data_periodically(self):
         while self.is_running:
@@ -85,7 +139,6 @@ class getTickData:
             await self.save_data()
 
     async def save_data(self):
-        # asyncio.to_thread, aby uruchomić metodę synchroniczną w osobnym wątku
         await asyncio.to_thread(self._save_data_sync)
 
     def _save_data_sync(self):
@@ -110,21 +163,22 @@ class getTickData:
 
     async def stop(self):
         self.is_running = False
+        await asyncio.sleep(0)
         if self.save_task:
             self.save_task.cancel()
             try:
                 await self.save_task
             except asyncio.CancelledError:
                 pass
-        # Zapisz pozostałem dane przed zamknięciem
         await self.save_data()
 
 
-async def main():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     main_uri = MAIN_URI
     streaming_uri = STREAMING_URI
     client = WebSocketClient(main_uri)
-
+    tick_data = None 
     try:
         await client.connect()
         logging.info("WebSocket connection established successfully")
@@ -132,39 +186,32 @@ async def main():
         login_response = await login(client)
         if not login_response or not login_response.get("status"):
             logging.error("Login failed")
+            yield
             return
 
         stream_session_id = login_response.get('streamSessionId')
         if not stream_session_id:
             logging.error("No streamSessionId received")
+            yield
             return
 
         streaming_client = StreamingWebSocketClient(streaming_uri, stream_session_id)
         await streaming_client.connect()
         logging.info("Streaming WebSocket connection established successfully")
 
-        server_time_response = await get_server_time(client)
-        if not server_time_response or not server_time_response.get("status"):
-            logging.error("Failed to get server time")
-            return
-        try:
-            server_datetime = datetime.datetime.strptime(
-                server_time_response["returnData"]["timeString"],
-                "%b %d, %Y, %I:%M:%S %p"
-            )
-            logging.info(f"Czas serwera: {server_datetime}")
-        except ValueError as e:
-            logging.error(f"Date parsing error: {e}")
-            return
-
         tick_data = getTickData(streaming_client, SYMBOLS)
-        await tick_data.start()
+        app.state.tick_data = tick_data 
+        # tick_data.start() jako zadanie w tle
+        task = asyncio.create_task(tick_data.start())
+        yield  # Aplikacja jest gotowa do obsługi żądań
 
     except Exception as e:
-        logging.error(f"Unexpected error: {e}\n{traceback.format_exc()}")
+        logging.error(f"Unexpected error in lifespan: {e}\n{traceback.format_exc()}")
+        yield
+
     finally:
-        # Zatrzymanie zbierania danych i zapis pozostałych danych
-        await tick_data.stop()
+        if tick_data:
+            await tick_data.stop()
         try:
             await logout(client)
             await client.disconnect()
@@ -173,8 +220,30 @@ async def main():
             logging.error(f"Error during disconnection: {e}")
 
 
-if __name__ == '__main__':
+app = FastAPI(lifespan=lifespan)
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/")
+async def get(request: Request):
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.info("Program interrupted by user")
+        return templates.TemplateResponse("index.html", {"request": request})
+    except Exception as e:
+        logging.error(f"Błąd podczas renderowania szablonu index.html: {e}\n{traceback.format_exc()}")
+        return HTMLResponse("Wystąpił błąd serwera", status_code=500)
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    tick_data = app.state.tick_data
+    await tick_data.register(websocket)
+    try:
+        while True:
+            await asyncio.sleep(10)
+    except WebSocketDisconnect:
+        await tick_data.unregister(websocket)
+
+
+if __name__ == '__main__':
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

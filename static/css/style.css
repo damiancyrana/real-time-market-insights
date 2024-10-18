@@ -1,0 +1,97 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    margin: 0;
+    padding: 20px;
+}
+
+h1 {
+    text-align: center;
+    color: #333;
+}
+
+.order-book-container {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.side {
+    width: 300px;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 10px;
+}
+
+.side h2 {
+    text-align: center;
+    color: #555;
+    margin-bottom: 10px;
+}
+
+.order-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    height: 25px;
+}
+
+.bid-row {
+    background-color: #e0ffe0;
+}
+
+.ask-row {
+    background-color: #ffe0e0;
+}
+
+.price {
+    width: 100px;
+    text-align: right;
+    padding-right: 10px;
+    font-weight: bold;
+    color: #333;
+}
+
+.volume {
+    height: 100%;
+    background-color: #4caf50;
+    text-align: right;
+    padding-right: 5px;
+    color: #fff;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.asks .row .volume {
+    background-color: #f44336;
+}
+
+.spread {
+    width: 100px;
+    background-color: #fff;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 10px;
+    text-align: center;
+}
+
+.spread h2 {
+    color: #555;
+    margin-bottom: 10px;
+}
+
+#spread {
+    font-size: 24px;
+    font-weight: bold;
+    color: #333;
+}

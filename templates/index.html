@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Order Book</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            var ws = new WebSocket("ws://" + window.location.host + "/ws");
+            ws.onmessage = function(event) {
+                var data = JSON.parse(event.data);
+                updateOrderBook(data);
+            };
+            ws.onerror = function(event) {
+                console.error("WebSocket error observed:", event);
+            };
+
+            function updateOrderBook(data) {
+                var symbol = data.symbol;
+                var orderBook = data.order_book;
+                var bidsContainer = document.getElementById("bids");
+                var asksContainer = document.getElementById("asks");
+
+                bidsContainer.innerHTML = "";
+                asksContainer.innerHTML = "";
+
+                var levels = Object.keys(orderBook).sort(function(a, b) {
+                    return parseInt(a) - parseInt(b);
+                });
+
+                levels.forEach(function(level) {
+                    var levelData = orderBook[level];
+                    var bid = levelData.bid;
+                    var bidVolume = levelData.bidVolume;
+                    var ask = levelData.ask;
+                    var askVolume = levelData.askVolume;
+                    var bidRow = document.createElement("div");
+
+                    bidRow.className = "row bid-row";
+                    bidRow.innerHTML = `
+                        <div class="price">${bid.toFixed(2)}</div>
+                        <div class="volume" style="width: ${bidVolume * 2}px;">${bidVolume}</div>
+                    `;
+                    bidsContainer.appendChild(bidRow);
+
+                    var askRow = document.createElement("div");
+                    askRow.className = "row ask-row";
+                    askRow.innerHTML = `
+                        <div class="price">${ask.toFixed(2)}</div>
+                        <div class="volume" style="width: ${askVolume * 2}px;">${askVolume}</div>
+                    `;
+                    asksContainer.appendChild(askRow);
+                });
+            }
+        });
+    </script>
+</head>
+<body>
+    <h1>Order Book - US100</h1>
+    <div class="order-book-container">
+        <div class="side bids">
+            <h2>Bids</h2>
+            <div id="bids" class="order-list">
+            </div>
+        </div>
+        <div class="spread">
+            <h2>Spread</h2>
+            <div id="spread">-</div>
+        </div>
+        <div class="side asks">
+            <h2>Asks</h2>
+            <div id="asks" class="order-list">
+            </div>
+        </div>
+    </div>
+</body>
+</html>
