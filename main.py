@@ -6,7 +6,7 @@ import traceback
 import orjson
 import pandas as pd
 import threading
-from collections import deque
+from collections import deque, defaultdict
 from websocket_commands import *
 from config import *
 
@@ -20,7 +20,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Lista symboli do pobrania
-SYMBOLS = ["US100"]
+SYMBOLS = ["BITCOIN"]
 
 class getTickData:
     def __init__(self, client, symbols):
@@ -29,14 +29,17 @@ class getTickData:
         self.is_running = False
         self.save_task = None
         self.dataframes = {symbol: deque() for symbol in symbols}
+        self.volume_profiles = {symbol: defaultdict(float) for symbol in symbols}
         # Asynchroniczna blokada dla kodu asynchronicznego
         self.async_data_lock = asyncio.Lock()
         # Blokada wątku dla kodu synchronicznego
         self.thread_data_lock = threading.Lock()
         # Inicjalizacja order book dla każdego symbolu
         self.order_books = {symbol: {} for symbol in symbols}
+        self.previous_order_books = {symbol: {} for symbol in symbols}
         self.websockets = set()
         self.ws_lock = asyncio.Lock()
+        self.market_metrics = {symbol: {'total_volume': 0, 'average_volume': 0, 'trade_count': 0} for symbol in symbols}
 
     async def subscribe_ticks(self):
         tasks = [self._subscribe_tick(symbol) for symbol in self.symbols]
@@ -85,20 +88,34 @@ class getTickData:
             order_book = self.order_books[symbol]
             order_book[level] = {
                 'ask': data['ask'],
-                'askVolume': data.get('askVolume'),
+                'askVolume': data.get('askVolume', 0),
                 'bid': data['bid'],
-                'bidVolume': data.get('bidVolume'),
+                'bidVolume': data.get('bidVolume', 0),
                 'timestamp': data['timestamp'],
             }
+
+            # Analiza wolumenu i profil wolumenu
+            price_level = (data['ask'] + data['bid']) / 2
+            volume = (data.get('askVolume', 0) + data.get('bidVolume', 0)) / 2
+            self.volume_profiles[symbol][price_level] += volume
+
+            # Aktualizacja statystyk rynkowych
+            self.market_metrics[symbol]['total_volume'] += volume
+            self.market_metrics[symbol]['trade_count'] += 1
+            self.market_metrics[symbol]['average_volume'] = self.market_metrics[symbol]['total_volume'] / self.market_metrics[symbol]['trade_count']
+
+            # Śledzenie zmian w czasie rzeczywistym
+            self.previous_order_books[symbol] = order_book.copy()
+
             await self.broadcast_order_book(symbol)
 
-            # zapisz tick do pliku
+            # Zapisz tick do pliku
             tick_data = {
                 'timestamp': data['timestamp'],
                 'ask': data['ask'],
                 'bid': data['bid'],
-                'askVolume': data.get('askVolume'),
-                'bidVolume': data.get('bidVolume'),
+                'askVolume': data.get('askVolume', 0),
+                'bidVolume': data.get('bidVolume', 0),
                 'level': data.get('level'),
                 'spreadRaw': data.get('spreadRaw'),
                 'spreadTable': data.get('spreadTable'),
@@ -110,9 +127,14 @@ class getTickData:
 
     async def broadcast_order_book(self, symbol):
         order_book = self.order_books[symbol]
+        volume_profile = self.volume_profiles[symbol]
+        market_metrics = self.market_metrics[symbol]
+
         message = {
             'symbol': symbol,
             'order_book': order_book,
+            'volume_profile': volume_profile,
+            'market_metrics': market_metrics,
         }
         websockets_to_remove = set()
         async with self.ws_lock:

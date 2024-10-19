@@ -4,16 +4,21 @@
     <meta charset="UTF-8">
     <title>Order Book</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         document.addEventListener("DOMContentLoaded", function() {
             var ws = new WebSocket("ws://" + window.location.host + "/ws");
             ws.onmessage = function(event) {
                 var data = JSON.parse(event.data);
                 updateOrderBook(data);
+                updateVolumeProfile(data);
+                updateMarketMetrics(data);
             };
             ws.onerror = function(event) {
                 console.error("WebSocket error observed:", event);
             };
+
+            var volumeProfileChart = null;
 
             function updateOrderBook(data) {
                 var symbol = data.symbol;
@@ -39,7 +44,7 @@
                     bidRow.className = "row bid-row";
                     bidRow.innerHTML = `
                         <div class="price">${bid.toFixed(2)}</div>
-                        <div class="volume" style="width: ${bidVolume * 2}px;">${bidVolume}</div>
+                        <div class="volume" style="width: ${Math.min(bidVolume * 2, 200)}px;">${bidVolume}</div>
                     `;
                     bidsContainer.appendChild(bidRow);
 
@@ -47,10 +52,67 @@
                     askRow.className = "row ask-row";
                     askRow.innerHTML = `
                         <div class="price">${ask.toFixed(2)}</div>
-                        <div class="volume" style="width: ${askVolume * 2}px;">${askVolume}</div>
+                        <div class="volume" style="width: ${Math.min(askVolume * 2, 200)}px;">${askVolume}</div>
                     `;
                     asksContainer.appendChild(askRow);
                 });
+
+                // Aktualizacja spreadu
+                var bestBid = Math.max(...levels.map(level => orderBook[level].bid));
+                var bestAsk = Math.min(...levels.map(level => orderBook[level].ask));
+                var spread = bestAsk - bestBid;
+                document.getElementById("spread").innerText = spread.toFixed(2);
+            }
+
+            function updateVolumeProfile(data) {
+                var volumeProfile = data.volume_profile;
+                var ctx = document.getElementById('volumeProfileChart').getContext('2d');
+
+                var prices = Object.keys(volumeProfile).map(price => parseFloat(price));
+                var volumes = Object.values(volumeProfile);
+
+                if (volumeProfileChart) {
+                    volumeProfileChart.data.labels = prices;
+                    volumeProfileChart.data.datasets[0].data = volumes;
+                    volumeProfileChart.update();
+                } else {
+                    volumeProfileChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: prices,
+                            datasets: [{
+                                label: 'Profil wolumenu',
+                                data: volumes,
+                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            scales: {
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: 'Cena'
+                                    }
+                                },
+                                y: {
+                                    title: {
+                                        display: true,
+                                        text: 'Wolumen'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
+            function updateMarketMetrics(data) {
+                var metrics = data.market_metrics;
+                document.getElementById('totalVolume').innerText = metrics.total_volume.toFixed(2);
+                document.getElementById('averageVolume').innerText = metrics.average_volume.toFixed(2);
+                document.getElementById('tradeCount').innerText = metrics.trade_count;
             }
         });
     </script>
@@ -72,6 +134,16 @@
             <div id="asks" class="order-list">
             </div>
         </div>
+    </div>
+
+    <h2>Profil Wolumenu</h2>
+    <canvas id="volumeProfileChart" width="800" height="400"></canvas>
+
+    <h2>Statystyki Rynkowe</h2>
+    <div class="market-metrics">
+        <p>Łączny Wolumen: <span id="totalVolume">-</span></p>
+        <p>Średni Wolumen: <span id="averageVolume">-</span></p>
+        <p>Liczba Transakcji: <span id="tradeCount">-</span></p>
     </div>
 </body>
 </html>
