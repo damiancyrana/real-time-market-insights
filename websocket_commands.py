@@ -7,7 +7,6 @@ from azure.keyvault.secrets import SecretClient
 from azure.identity import DefaultAzureCredential
 from config import *
 
-
 class WebSocketClient:
     def __init__(self, uri):
         self.uri = uri
@@ -27,7 +26,6 @@ class WebSocketClient:
         await self.connection.send(message)
         response = await self.connection.recv()
         return orjson.loads(response)
-
 
 class StreamingWebSocketClient:
     def __init__(self, uri, stream_session_id):
@@ -51,12 +49,12 @@ class StreamingWebSocketClient:
     async def receive(self):
         try:
             message = await self.connection.recv()
+            logging.info(f"Raw message received: {message}")
             data = orjson.loads(message)
             return data
         except Exception as e:
             logging.error(f"Error receiving message: {e}")
             return None
-
 
 @lru_cache()
 def get_keyvault_secret(secret_name):
@@ -69,10 +67,12 @@ def get_keyvault_secret(secret_name):
         logging.error(f"Wystąpił błąd podczas pobierania hasła: {e}")
         return None
 
-
 async def login(client):
     user_id = get_keyvault_secret("XTB-user-DEMO")
     password = get_keyvault_secret("XTB-password")
+    if not user_id or not password:
+        logging.error("User ID or password not retrieved from Key Vault")
+        return None
     command = {
         "command": "login",
         "arguments": {
@@ -81,8 +81,11 @@ async def login(client):
         }
     }
     response = await client.send_command(command)
+    if response.get('status', False):
+        logging.info("Login successful")
+    else:
+        logging.error(f"Login failed: {response}")
     return response
-
 
 async def get_server_time(client):
     command = {
@@ -90,7 +93,6 @@ async def get_server_time(client):
     }
     response = await client.send_command(command)
     return response
-
 
 async def logout(client):
     command = {

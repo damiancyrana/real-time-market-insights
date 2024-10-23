@@ -2,148 +2,106 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Order Book</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script>
-        document.addEventListener("DOMContentLoaded", function() {
-            var ws = new WebSocket("ws://" + window.location.host + "/ws");
-            ws.onmessage = function(event) {
-                var data = JSON.parse(event.data);
-                updateOrderBook(data);
-                updateVolumeProfile(data);
-                updateMarketMetrics(data);
-            };
-            ws.onerror = function(event) {
-                console.error("WebSocket error observed:", event);
-            };
-
-            var volumeProfileChart = null;
-
-            function updateOrderBook(data) {
-                var symbol = data.symbol;
-                var orderBook = data.order_book;
-                var bidsContainer = document.getElementById("bids");
-                var asksContainer = document.getElementById("asks");
-
-                bidsContainer.innerHTML = "";
-                asksContainer.innerHTML = "";
-
-                var levels = Object.keys(orderBook).sort(function(a, b) {
-                    return parseInt(a) - parseInt(b);
-                });
-
-                levels.forEach(function(level) {
-                    var levelData = orderBook[level];
-                    var bid = levelData.bid;
-                    var bidVolume = levelData.bidVolume;
-                    var ask = levelData.ask;
-                    var askVolume = levelData.askVolume;
-                    var bidRow = document.createElement("div");
-
-                    bidRow.className = "row bid-row";
-                    bidRow.innerHTML = `
-                        <div class="price">${bid.toFixed(2)}</div>
-                        <div class="volume" style="width: ${Math.min(bidVolume * 2, 200)}px;">${bidVolume}</div>
-                    `;
-                    bidsContainer.appendChild(bidRow);
-
-                    var askRow = document.createElement("div");
-                    askRow.className = "row ask-row";
-                    askRow.innerHTML = `
-                        <div class="price">${ask.toFixed(2)}</div>
-                        <div class="volume" style="width: ${Math.min(askVolume * 2, 200)}px;">${askVolume}</div>
-                    `;
-                    asksContainer.appendChild(askRow);
-                });
-
-                // Aktualizacja spreadu
-                var bestBid = Math.max(...levels.map(level => orderBook[level].bid));
-                var bestAsk = Math.min(...levels.map(level => orderBook[level].ask));
-                var spread = bestAsk - bestBid;
-                document.getElementById("spread").innerText = spread.toFixed(2);
-            }
-
-            function updateVolumeProfile(data) {
-                var volumeProfile = data.volume_profile;
-                var ctx = document.getElementById('volumeProfileChart').getContext('2d');
-
-                var prices = Object.keys(volumeProfile).map(price => parseFloat(price));
-                var volumes = Object.values(volumeProfile);
-
-                if (volumeProfileChart) {
-                    volumeProfileChart.data.labels = prices;
-                    volumeProfileChart.data.datasets[0].data = volumes;
-                    volumeProfileChart.update();
-                } else {
-                    volumeProfileChart = new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: prices,
-                            datasets: [{
-                                label: 'Profil wolumenu',
-                                data: volumes,
-                                backgroundColor: 'rgba(54, 162, 235, 0.6)',
-                                borderColor: 'rgba(54, 162, 235, 1)',
-                                borderWidth: 1
-                            }]
-                        },
-                        options: {
-                            scales: {
-                                x: {
-                                    title: {
-                                        display: true,
-                                        text: 'Cena'
-                                    }
-                                },
-                                y: {
-                                    title: {
-                                        display: true,
-                                        text: 'Wolumen'
-                                    }
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-
-            function updateMarketMetrics(data) {
-                var metrics = data.market_metrics;
-                document.getElementById('totalVolume').innerText = metrics.total_volume.toFixed(2);
-                document.getElementById('averageVolume').innerText = metrics.average_volume.toFixed(2);
-                document.getElementById('tradeCount').innerText = metrics.trade_count;
-            }
-        });
-    </script>
+    <!-- Chart.js plugin do wykresu heatmapy -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-matrix@2.0.0"></script>
+    <script src="/static/js/script.js"></script>
 </head>
 <body>
-    <h1>Order Book - US100</h1>
+    <div id="notifications" class="notifications"></div>
+
+    <div class="dashboard">
+        <div class="metric">
+            <h3>Rekomendacja</h3>
+            <div id="recommendation" class="value">-</div>
+        </div>
+        <div class="metric">
+            <h3>Kierunek Trendu</h3>
+            <div id="trendDirectionIcon" class="value">-</div>
+        </div>
+        <div class="metric">
+            <h3>Siła Trendu</h3>
+            <div id="trendStrength" class="value">-</div>
+        </div>
+        <div class="metric">
+            <h3>Momentum</h3>
+            <div id="momentum" class="value">-</div>
+        </div>
+        <div class="metric">
+            <h3>Strach/Chciwość</h3>
+            <div id="fearGreedIndex" class="value">-</div>
+        </div>
+    </div>
+
     <div class="order-book-container">
         <div class="side bids">
             <h2>Bids</h2>
             <div id="bids" class="order-list">
+                <!-- Lista bidów -->
             </div>
         </div>
         <div class="spread">
             <h2>Spread</h2>
             <div id="spread">-</div>
+            <p>Spread Raw: <span id="spreadRaw">-</span></p>
+            <p>Spread Table: <span id="spreadTable">-</span></p>
         </div>
         <div class="side asks">
             <h2>Asks</h2>
             <div id="asks" class="order-list">
+                <!-- Lista asków -->
             </div>
         </div>
     </div>
 
+    <h2>Głębokość Rynku</h2>
+    <canvas id="depthChart" width="800" height="400"></canvas>
+
+    <h2>Heatmapa Wolumenu</h2>
+    <canvas id="heatmapChart" width="800" height="400"></canvas>
+
     <h2>Profil Wolumenu</h2>
     <canvas id="volumeProfileChart" width="800" height="400"></canvas>
+
+    <h2>Cumulative Volume Delta (CVD)</h2>
+    <canvas id="cvdChart" width="800" height="400"></canvas>
+
+    <h2>Tick Chart</h2>
+    <canvas id="tickChart" width="800" height="400"></canvas>
+
+    <h2>Taśma Zleceń</h2>
+    <div id="orderFlow" class="order-flow">
+        <!-- Taśma zleceń będzie tutaj wyświetlana -->
+    </div>
+
+    <h2>Poziomy Wsparcia i Oporu</h2>
+    <div id="supportResistanceLevels" class="levels">
+        <!-- Poziomy wsparcia i oporu -->
+    </div>
 
     <h2>Statystyki Rynkowe</h2>
     <div class="market-metrics">
         <p>Łączny Wolumen: <span id="totalVolume">-</span></p>
         <p>Średni Wolumen: <span id="averageVolume">-</span></p>
         <p>Liczba Transakcji: <span id="tradeCount">-</span></p>
+        <p>Order Book Imbalance: <span id="orderImbalance">-</span></p>
+        <p>Średni Wolumen (ostatnie N transakcji): <span id="recentAvgVolume">-</span></p>
+        <p>Średnia Cena (ostatnie N transakcji): <span id="recentAvgPrice">-</span></p>
+        <p>Maksymalny Wolumen (ostatnie N transakcji): <span id="recentMaxVolume">-</span></p>
+        <p>Minimalny Wolumen (ostatnie N transakcji): <span id="recentMinVolume">-</span></p>
+        <p>Nastroje Rynku: <span id="marketSentiment">-</span></p>
+        <p>Dzienne High: <span id="dailyHigh">-</span></p>
+        <p>Dzienne Low: <span id="dailyLow">-</span></p>
+        <p>Źródło Ceny: <span id="quoteSource">-</span></p>
+    </div>
+
+    <h2>Wolumen Transakcji</h2>
+    <canvas id="transactionVolumeChart" width="800" height="400"></canvas>
+
+    <h2>Ostatnie Transakcje</h2>
+    <div id="transactions" class="transactions">
+        <!-- Transakcje -->
     </div>
 </body>
 </html>
